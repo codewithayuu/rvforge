@@ -1,0 +1,194 @@
+name: RVForge RISC-V Cross-Compilation CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      enable_rvv:
+        description: 'Enable RVV stretch target'
+        required: false
+        default: 'false'
+
+env:
+  RISCV_TRIPLE: riscv64-linux-gnu
+  MARCH: rv64gc
+  MABI: lp64d
+  BUILD_DIR: build_ci
+  INSTALL_DIR: install_ci
+
+jobs:
+  toolchain-probe:
+    name: Toolchain Verification
+    runs-on: ubuntu-22.04
+    outputs:
+      gcc_version: ${{ steps.probe.outputs.gcc_version }}
+      qemu_version: ${{ steps.probe.outputs.qemu_version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install RISC-V toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            gcc-riscv64-linux-gnu \
+            g++-riscv64-linux-gnu \
+            binutils-riscv64-linux-gnu \
+            qemu-user-static \
+            binfmt-support \
+            cmake ninja-build \
+            autoconf automake libtool texinfo \
+            wget xz-utils gawk libgmp-dev
+
+      - name: Probe toolchain
+        id: probe
+        run: |
+          GCC_VER=$(riscv64-linux-gnu-gcc --version | head -1)
+          QEMU_VER=$(qemu-riscv64-static --version | head -1)
+          echo "gcc_version=${GCC_VER}" >> "$GITHUB_OUTPUT"
+          echo "qemu_version=${QEMU_VER}" >> "$GITHUB_OUTPUT"
+          echo "GCC:  ${GCC_VER}"
+          echo "QEMU: ${QEMU_VER}"
+
+      - name: Compile and run hello-riscv
+        run: |
+          cat > /tmp/hello.c <<'EOF'
+          #include <stdio.h>
+          int main(void) {
+              printf("Hello from RISC-V (arch=%s)\n",
+          #if defined(__riscv)
+                  "riscv64"
+          #else
+                  "unknown"
+          #endif
+              );
+              return 0;
+          }
+          EOF
+          riscv64-linux-gnu-gcc -march=rv64gc -mabi=lp64d -static \
+              -o /tmp/hello /tmp/hello.c
+          file /tmp/hello
+          qemu-riscv64-static /tmp/hello
+
+  cross-build-mpfr:
+    name: Cross-Build MPFR
+    runs-on: ubuntu-22.04
+    needs: toolchain-probe
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            gcc-riscv64-linux-gnu g++-riscv64-linux-gnu \
+            binutils-riscv64-linux-gnu qemu-user-static \
+            cmake ninja-build autoconf automake libtool texinfo \
+            wget xz-utils gawk libgmp-dev
+
+      - name: Cache MPFR build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.BUILD_DIR }}/gmp-build
+            ${{ env.BUILD_DIR }}/mpfr-build
+            ${{ env.INSTALL_DIR }}
+          key: mpfr-riscv64-${{ hashFiles('ports/mpfr/CMakeLists.txt') }}
+
+      - name: Configure
+        run: |
+          cmake -S . -B ${{ env.BUILD_DIR }} \
+            -DCMAKE_TOOLCHAIN_FILE=toolchain/riscv64-linux-gnu.cmake \
+            -DRVFORGE_BUILD_MPFR=ON \
+            -DRVFORGE_BUILD_OPENBLAS=OFF \
+            -G Ninja \
+            2>&1 | tee docs/errors/ci_configure.log
+
+      - name: Build GMP + MPFR
+        run: |
+          cmake --build ${{ env.BUILD_DIR }} --target gmp_riscv  -- -j4 \
+            2>&1 | tee docs/errors/ci_gmp_build.log
+          cmake --build ${{ env.BUILD_DIR }} --target mpfr_riscv -- -j4 \
+            2>&1 | tee docs/errors/ci_mpfr_build.log
+
+      - name: Build smoke test binary
+        run: |
+          cmake --build ${{ env.BUILD_DIR }} --target mpfr_smoke -- -j4
+
+      - name: Run smoke test under QEMU
+        run: |
+          qemu-riscv64-static \
+            -L /usr/riscv64-linux-gnu \
+            ${{ env.BUILD_DIR }}/bin/mpfr_smoke
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mpfr-logs
+          path: docs/errors/
+
+  cross-build-openblas:
+    name: Cross-Build OpenBLAS
+    runs-on: ubuntu-22.04
+    needs: toolchain-probe
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            gcc-riscv64-linux-gnu g++-riscv64-linux-gnu \
+            binutils-riscv64-linux-gnu qemu-user-static \
+            cmake ninja-build
+
+      - name: Cache OpenBLAS build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.BUILD_DIR }}/openblas-build
+            ${{ env.INSTALL_DIR }}/openblas
+          key: openblas-riscv64-${{ hashFiles('ports/openblas/CMakeLists.txt', 'patches/0002-*.patch') }}
+
+      - name: Configure
+        run: |
+          cmake -S . -B ${{ env.BUILD_DIR }} \
+            -DCMAKE_TOOLCHAIN_FILE=toolchain/riscv64-linux-gnu.cmake \
+            -DRVFORGE_BUILD_MPFR=OFF \
+            -DRVFORGE_BUILD_OPENBLAS=ON \
+            -G Ninja \
+            2>&1 | tee docs/errors/ci_openblas_configure.log
+
+      - name: Build OpenBLAS
+        run: |
+          cmake --build ${{ env.BUILD_DIR }} --target openblas_riscv -- -j4 \
+            2>&1 | tee docs/errors/ci_openblas_build.log
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openblas-logs
+          path: docs/errors/
+
+  summarize:
+    name: Summary
+    runs-on: ubuntu-22.04
+    needs: [toolchain-probe, cross-build-mpfr, cross-build-openblas]
+    if: always()
+    steps:
+      - name: Write summary
+        run: |
+          echo "## RVForge Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Toolchain Probe | ${{ needs.toolchain-probe.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| MPFR Cross-Build | ${{ needs.cross-build-mpfr.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| OpenBLAS Cross-Build | ${{ needs.cross-build-openblas.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "GCC: ${{ needs.toolchain-probe.outputs.gcc_version }}" >> $GITHUB_STEP_SUMMARY
+          echo "QEMU: ${{ needs.toolchain-probe.outputs.qemu_version }}" >> $GITHUB_STEP_SUMMARY
