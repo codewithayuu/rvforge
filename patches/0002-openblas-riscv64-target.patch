@@ -1,0 +1,70 @@
+From: RVForge <rvforge@example.com>
+Date: Mon, 01 Jan 2024 00:00:01 +0000
+Subject: [PATCH 0002] openblas: add RISCV64_GENERIC target to CMake target table
+
+OpenBLAS 0.3.26 CMakeLists.txt does not have RISCV64_GENERIC in its
+TARGET resolution table. When TARGET=RISCV64_GENERIC is passed, the
+build falls through with an undefined kernel path.
+
+This patch adds the RISCV64_GENERIC target entry, sets ARCH=riscv64,
+points to kernel/riscv64 for architecture kernels, and kernel/generic
+for all BLAS routines without native implementations.
+---
+ CMakeLists.txt             | 18 ++++++++++++++++++
+ cmake/prebuild.cmake       |  8 ++++++++
+ kernel/riscv64/KERNEL      |  1 +
+ 2 files changed, 27 insertions(+)
+ create mode 100644 kernel/riscv64/KERNEL
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index d3f1a2c..9b7c3e4 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -87,6 +87,24 @@ if(DEFINED TARGET)
+     set(ARCH "arm64")
+     set(CORE "CORTEXA57")
+   endif()
++  # RVForge: RISC-V 64-bit generic target
++  if(TARGET STREQUAL "RISCV64_GENERIC")
++    set(ARCH    "riscv64")
++    set(CORE    "RISCV64_GENERIC")
++    set(BINARY  "64")
++    set(NO_AVX   1)
++    set(NO_AVX2  1)
++    set(NO_SSE   1)
++    set(NO_SSE2  1)
++    set(NO_SSE3  1)
++    set(NO_SSSE3 1)
++    add_definitions(-DRISCV64_GENERIC)
++    add_definitions(-D__riscv)
++    add_definitions(-D__riscv_xlen=64)
++    add_definitions(-DARCH_RISCV64)
++    add_definitions(-DNO_AVX -DNO_AVX2 -DNO_SSE -DNO_SSE2)
++    message(STATUS "RVForge: building for RISCV64_GENERIC target")
++  endif()
+ endif()
+ 
+diff --git a/cmake/prebuild.cmake b/cmake/prebuild.cmake
+index 5a1c3f1..4d2e891 100644
+--- a/cmake/prebuild.cmake
++++ b/cmake/prebuild.cmake
+@@ -41,6 +41,14 @@ if(ARCH STREQUAL "arm64")
+   set(KERNEL_DIR "${PROJECT_SOURCE_DIR}/kernel/arm64")
+ endif()
+ 
++# RVForge: route riscv64 to its kernel directory
++if(ARCH STREQUAL "riscv64")
++  set(KERNEL_DIR "${PROJECT_SOURCE_DIR}/kernel/riscv64")
++  set(ARCH_KERNEL_DIR "${PROJECT_SOURCE_DIR}/kernel/riscv64")
++  set(GENERIC_KERNEL_DIR "${PROJECT_SOURCE_DIR}/kernel/generic")
++  set(HAVE_RISCV_KERNEL 1)
++  message(STATUS "RVForge: kernel path = ${KERNEL_DIR}")
++endif()
++
+diff --git a/kernel/riscv64/KERNEL b/kernel/riscv64/KERNEL
+new file mode 100644
+index 0000000..1234567
+--- /dev/null
++++ b/kernel/riscv64/KERNEL
+@@ -0,0 +1 @@
++RISCV64_GENERIC

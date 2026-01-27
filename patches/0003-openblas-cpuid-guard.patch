@@ -1,0 +1,62 @@
+From: RVForge <rvforge@example.com>
+Date: Mon, 01 Jan 2024 00:00:02 +0000
+Subject: [PATCH 0003] openblas: guard x86 cpuid and SIMD detection against riscv64
+
+driver/others/cpuid_x86.c uses __cpuid() intrinsic and x86 inline
+assembly unconditionally. This file is unconditionally compiled in
+the driver layer even when ARCH=riscv64.
+
+Wrap the entire file body in #ifndef __riscv and provide a stub for riscv64.
+Also guard getenv-based SIMD selection paths in driver/others/blas_server.c.
+---
+ driver/others/cpuid_x86.c    | 8 ++++++++
+ driver/others/blas_server.c  | 6 ++++++
+ driver/others/dynamic.c      | 4 ++++
+ 3 files changed, 18 insertions(+)
+
+diff --git a/driver/others/cpuid_x86.c b/driver/others/cpuid_x86.c
+index aabbcc1..ddeeff2 100644
+--- a/driver/others/cpuid_x86.c
++++ b/driver/others/cpuid_x86.c
+@@ -1,5 +1,13 @@
++/*
++ * RVForge: entire x86 cpuid file is excluded on riscv64.
++ * A minimal stub is provided so linker targets resolve.
++ */
++#if defined(__riscv)
++
++int get_cpuid(void) { return 0; }
++int support_avx(void) { return 0; }
++int support_avx2(void) { return 0; }
++int support_avx512(void) { return 0; }
++
++#else /* !__riscv */
++
+ #include <stdint.h>
+ /* ... original cpuid_x86.c content unchanged ... */
+ 
++#endif /* __riscv */
+diff --git a/driver/others/blas_server.c b/driver/others/blas_server.c
+index 1122334..5566778 100644
+--- a/driver/others/blas_server.c
++++ b/driver/others/blas_server.c
+@@ -88,8 +88,14 @@ static int blas_server_init = 0;
+ 
++#if !defined(__riscv)
+ #ifdef ARCH_X86
+   if (support_avx())  flags |= FLAG_AVX;
+   if (support_avx2()) flags |= FLAG_AVX2;
+ #endif
++#endif /* !__riscv */
+ 
+diff --git a/driver/others/dynamic.c b/driver/others/dynamic.c
+index aabb112..ccdd334 100644
+--- a/driver/others/dynamic.c
++++ b/driver/others/dynamic.c
+@@ -1,5 +1,9 @@
++#if defined(__riscv)
++/* RVForge: no dynamic CPU dispatch on riscv64 — static generic path only */
++#else
+ #include "cpuid_x86.h"
+ /* ... original content ... */
++#endif /* __riscv */
