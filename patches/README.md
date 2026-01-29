@@ -1,69 +1,90 @@
 # RVForge Patch Registry
 
-## Patch Format
-All patches are standard `git format-patch` output applied with:
-```
-patch -p1 -d <source_dir> < patches/<name>.patch
-```
+## Applying All Patches
 
-## Audit Log (pre-patch)
-
-### MPFR x86 SIMD Audit
-
-MPFR 4.2.1 is largely portable C. Architecture-specific paths live in:
-- `src/mpfr-impl.h` — conditional `__float128` usage on x86
-- `src/round_raw_generic.c` — no SIMD
-- `configure.ac` — x86-specific `-mfpu` flag probing
-
-No `_mm_*` intrinsics found. MPFR's portability is a primary reason it was chosen.
-GMP (dependency) contains x86 assembly in `mpn/x86_64/` but ships clean fallbacks
-in `mpn/generic/` which autoconf selects for the RISC-V host.
-
-**MPFR failure modes observed:**
-| Error | Root cause | Fix planned |
-|-------|-----------|-------------|
-| `configure: error: GMP not found` | Build order wrong | ExternalProject DEPENDS chain |
-| `undefined reference to __stack_chk_fail` | sysroot mismatch | `-fno-stack-protector` in CFLAGS |
-| `cannot find -lgcc_s` | Static linking needs `-static-libgcc` | Toolchain cmake flag |
-
-### OpenBLAS x86 SIMD Audit
-
-OpenBLAS has extensive x86-specific kernel files. The following directories
-contain x86 SIMD code that **must not be compiled** for RISC-V:
-
-```
-kernel/x86_64/
-  dgemm_kernel_4x8_haswell.c      — AVX2 FMA intrinsics
-  dgemm_kernel_4x4_nehalem.S      — SSE4 assembly
-  dgemv_t_4_SSE.c                 — SSE2 intrinsics
-  sgemm_kernel_16x4_sandy.c       — AVX intrinsics
-  zgemm_kernel_2x4_sandy.c        — AVX intrinsics
-  ...(47 additional files)
-kernel/x86/
-  ...(23 additional files)
+```bash
+./scripts/apply_patches.sh
 ```
 
-OpenBLAS's CMake build system selects kernel directory via `ARCH` and `TARGET` 
-variables. Setting `ARCH=riscv64 TARGET=RISCV64_GENERIC` routes to:
+## Patch Index
 
-```
-kernel/riscv64/         (exists, minimal)
-kernel/generic/         (pure C fallbacks)
-```
+| ID | File | Target | Type | | Status |
+|----|------|--------|------|-------|--------|
+| 0001 | `0001-gmp-riscv-host-detect.patch` | GMP 6.3.0 | Build/configure fix | 2 | ✅ Applied |
+| 0002 | `0002-openblas-riscv64-target.patch` | OpenBLAS 0.3.26 | CMake target table | 2 | ✅ Applied |
+| 0003 | `0003-openblas-cpuid-guard.patch` | OpenBLAS 0.3.26 | x86 CPUID guard | 2 | ✅ Applied |
+| 0004 | `0004-openblas-dgemv-sse2-scalar.patch` | OpenBLAS 0.3.26 | SIMD → scalar | 3 | ⏳ |
+| 0005 | `0005-openblas-dgemm-avx-scalar.patch` | OpenBLAS 0.3.26 | SIMD → scalar | 3 | ⏳ |
 
-**failure modes observed:**
-| Error | Root cause | Fix planned |
-|-------|-----------|-------------|
-| `TARGET=RISCV64_GENERIC` not recognized in 0.3.26 | Older CMake path | Patch `CMakeLists.txt` TARGET table |
-| `NOFORTRAN=1` linker errors | Some BLAS routines need Fortran runtime | Wrap with `--allow-shlib-undefined` |
-| `cpuid` assembly in `driver/others/` | x86-only CPU detection | Patch 0002 guards with `#ifndef __riscv` |
+---
 
-## Planned Patches (2–3)
+## Patch 0001 — GMP riscv64 Host Detection
 
-| ID | File | Type | Status |
-|----|------|------|--------|
-| 0001 | `mpfr` GMP detection | Build fix | Pending |
-| 0002 | `openblas` x86 kernel guard | SIMD removal | Pending |
-| 0003 | `openblas` cpuid removal | Platform guard | Pending |
-| 0004 | `openblas` DGEMV SSE2 → scalar | SIMD fallback | Pending |
-| 0005 | `openblas` DGEMM AVX → scalar | SIMD fallback | Pending |
+**File:** `configure.ac`, `mpn/generic/Makefile.am` 
+**Problem:** GMP's autoconf `configure.ac` did not have a `riscv64-*-*` case in
+its host CPU identification table. Without it, configure falls through to an
+error path when `--disable-assembly` is not explicitly set, because the assembly
+subdirectory detection logic sees an unknown host and aborts.
+
+**Root cause:** GMP 6.3.0 ships riscv64 support but autoconf's host tuple
+matching requires exact pattern. The Debian cross-compiler reports
+`riscv64-linux-gnu` which must match `riscv64-*-*`.
+
+**Trade-off:** `--disable-assembly` forces the `mpn/generic/` C path for all
+multi-precision arithmetic. This is ~2–4× slower than an optimized assembly
+implementation. For RVForge's correctness-validation purpose this is acceptable;
+a production deployment would use `mpn/riscv64/` assembly (exists in GMP 6.3.0).
+
+---
+
+## Patch 0002 — OpenBLAS RISCV64_GENERIC Target
+
+**File:** `CMakeLists.txt`, `cmake/prebuild.cmake`, `kernel/riscv64/KERNEL` 
+**Problem:** OpenBLAS 0.3.26 CMake build system does not have `RISCV64_GENERIC` 
+in its `if(TARGET STREQUAL ...)` dispatch table. When this target is passed,
+`ARCH`, `CORE`, and `KERNEL_DIR` remain undefined, causing the build to select
+no kernel files and then fail at link time with undefined BLAS symbols.
+
+**Root cause:** The `RISCV64_GENERIC` target was added to the Make-based build
+system but not fully ported to CMake. The CMake port only has `RISCV64_ZVL128B` 
+variants for specific vector hardware.
+
+**Trade-off:** `RISCV64_GENERIC` routes all BLAS routines through `kernel/generic/` 
+pure-C reference implementations. Performance is ~10–30× below an AVX-tuned
+x86_64 build. This is the correct starting point; adds RVV paths for
+selected routines.
+
+---
+
+## Patch 0003 — OpenBLAS CPUID Guard
+
+**File:** `driver/others/cpuid_x86.c`, `driver/others/blas_server.c`,
+          `driver/others/dynamic.c` 
+**Problem:** `cpuid_x86.c` uses `__cpuid()` GCC builtin and `__get_cpuid_count()` 
+from `<cpuid.h>` which are x86-only. This file is unconditionally compiled in
+the driver layer even when `ARCH=riscv64`.
+
+**Root cause:** OpenBLAS's driver build rules do not gate `cpuid_x86.c` on
+architecture. The CMake `SOURCES` list in `driver/others/CMakeLists.txt` includes
+it without an `if(ARCH STREQUAL "x86_64")` guard.
+
+**Fix:** Wrap entire file body in `#if !defined(__riscv) ... #endif` and provide
+a zero-returning stub. The riscv64 compiler defines `__riscv` automatically.
+
+**Trade-off:** None. The CPUID path is entirely meaningless on RISC-V. The stub
+returns 0 for all capability queries, which correctly signals "no SIMD extensions"
+to the OpenBLAS dispatch logic.
+
+---
+
+## Planned Patches
+
+### 0004 — DGEMV SSE2 → Scalar Fallback
+Target: `kernel/x86_64/dgemv_t_4_SSE.c` 
+SIMD: `_mm_load_pd`, `_mm_mul_pd`, `_mm_add_pd`, `_mm_store_pd` 
+Replacement: scalar loop with equivalent semantics
+
+### 0005 — DGEMM AVX → Scalar Fallback
+Target: `kernel/x86_64/dgemm_kernel_4x8_haswell.c` 
+SIMD: `_mm256_fmadd_pd`, `_mm256_loadu_pd`, `_mm256_storeu_pd` 
+Replacement: scalar FMA loop

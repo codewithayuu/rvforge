@@ -1,0 +1,50 @@
+# Build directories
+build/
+build_*/
+build-*/
+
+# External dependencies (downloaded sources)
+extern/
+!extern/.gitkeep
+
+# Logs
+*.log
+docs/errors/*.log
+docs/errors/*.txt
+
+# Generated files
+*.a
+*.o
+*.so
+*.exe
+bin/
+install/
+install_*/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake-build-*/
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+
+# Ninja
+.ninja_deps
+.ninja_log
+
+# Patch backup files
+*.orig
+*.rej
+*~
