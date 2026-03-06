@@ -1,0 +1,73 @@
+From: RVForge <rvforge@example.com>
+Date: Mon, 01 Jan 2024 00:00:06 +0000
+Subject: [PATCH 0007] openblas: replace AVX zgemm kernel with scalar complex fallback
+
+kernel/x86_64/zgemm_kernel_2x4_sandy.c uses AVX for complex double:
+  _mm256_addsub_pd  — alternating add/sub for complex multiply
+  _mm256_moveldup_pd / _mm256_movehdup_pd — lane duplication
+  _mm256_mul_pd, _mm256_add_pd
+
+Complex multiplication: (a+bi)(c+di) = (ac-bd) + (ad+bc)i
+The scalar version uses explicit real/imag component separation.
+---
+ kernel/x86_64/zgemm_kernel_2x4_sandy.c | 70 +++++++++++++++++++++++++
+ 1 file changed, 70 insertions(+)
+
+diff --git a/kernel/x86_64/zgemm_kernel_2x4_sandy.c b/kernel/x86_64/zgemm_kernel_2x4_sandy.c
+index aabbcc1..ee3c4d5 100644
+--- a/kernel/x86_64/zgemm_kernel_2x4_sandy.c
++++ b/kernel/x86_64/zgemm_kernel_2x4_sandy.c
+@@ -1,5 +1,75 @@
++#if defined(__riscv)
++/*
++ * RVForge scalar fallback: zgemm complex double kernel.
++ *
++ * Complex storage: interleaved [re0, im0, re1, im1, ...]
++ *
++ * Replaced:
++ *   _mm256_addsub_pd   → explicit re = ac-bd, im = ad+bc
++ *   _mm256_moveldup_pd → duplicate real part to both lanes
++ *   _mm256_movehdup_pd → duplicate imag part to both lanes
++ *   _mm256_mul_pd      → scalar multiply
++ *   _mm256_add_pd      → scalar add
++ */
++
++static void zgemm_kernel_2x4(
++    long k,
++    double alpha_r, double alpha_i,
++    const double * restrict a,
++    const double * restrict b,
++    double       * restrict c,
++    long ldc)
++{
++    double cr[2][4], ci[2][4];
++    for (int i = 0; i < 2; i++)
++        for (int j = 0; j < 4; j++)
++            cr[i][j] = ci[i][j] = 0.0;
++
++    for (long p = 0; p < k; p++) {
++        double ar0 = a[(p*2+0)*2+0], ai0 = a[(p*2+0)*2+1];
++        double ar1 = a[(p*2+1)*2+0], ai1 = a[(p*2+1)*2+1];
++        for (int j = 0; j < 4; j++) {
++            double br = b[(p*4+j)*2+0];
++            double bi = b[(p*4+j)*2+1];
++            cr[0][j] += ar0*br - ai0*bi;
++            ci[0][j] += ar0*bi + ai0*br;
++            cr[1][j] += ar1*br - ai1*bi;
++            ci[1][j] += ar1*bi + ai1*br;
++        }
++    }
++
++    for (int i = 0; i < 2; i++) {
++        for (int j = 0; j < 4; j++) {
++            double r = alpha_r*cr[i][j] - alpha_i*ci[i][j];
++            double im = alpha_r*ci[i][j] + alpha_i*cr[i][j];
++            c[(i*ldc+j)*2+0] += r;
++            c[(i*ldc+j)*2+1] += im;
++        }
++    }
++}
++
++#else
+ #include <immintrin.h>
++#endif /* __riscv */
