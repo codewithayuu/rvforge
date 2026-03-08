@@ -7,6 +7,7 @@ set(HARNESS_INCLUDE_DIRS
     ${RVFORGE_INSTALL_DIR}/mpfr/include
     ${RVFORGE_INSTALL_DIR}/gmp/include
     ${RVFORGE_INSTALL_DIR}/openblas/include
+    ${RVFORGE_ROOT}/simd_fallbacks
 )
 
 set(MPFR_STATIC_LIBS
@@ -32,34 +33,55 @@ rvforge_apply_flags(blas_smoke)
 rvforge_record_size(blas_smoke)
 add_dependencies(blas_smoke openblas_riscv)
 
-set_target_properties(mpfr_smoke blas_smoke PROPERTIES
+add_executable(numerical_suite numerical_suite.c)
+target_include_directories(numerical_suite PRIVATE ${HARNESS_INCLUDE_DIRS})
+target_link_libraries(numerical_suite PRIVATE ${BLAS_STATIC_LIBS} m)
+rvforge_apply_flags(numerical_suite)
+rvforge_record_size(numerical_suite)
+add_dependencies(numerical_suite openblas_riscv)
+
+add_executable(simd_audit_report
+    simd_audit_report.c
+    ${RVFORGE_ROOT}/simd_fallbacks/scalar_dgemv.c
+    ${RVFORGE_ROOT}/simd_fallbacks/scalar_dgemm.c
+    ${RVFORGE_ROOT}/simd_fallbacks/scalar_sgemm.c
+    ${RVFORGE_ROOT}/simd_fallbacks/scalar_memory.c
+)
+target_include_directories(simd_audit_report PRIVATE ${HARNESS_INCLUDE_DIRS})
+target_link_libraries(simd_audit_report PRIVATE m)
+rvforge_apply_flags(simd_audit_report)
+rvforge_record_size(simd_audit_report)
+
+set_target_properties(
+    mpfr_smoke blas_smoke numerical_suite simd_audit_report
+    PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${RVFORGE_BUILD_DIR}/bin
 )
 
-add_custom_target(run_mpfr_smoke
-    COMMAND ${QEMU_BIN} -L /usr/riscv64-linux-gnu
-            ${RVFORGE_BUILD_DIR}/bin/mpfr_smoke
-    DEPENDS mpfr_smoke
-    COMMENT "Running mpfr_smoke under qemu-riscv64-static"
-    VERBATIM
-)
+foreach(tgt IN ITEMS mpfr_smoke blas_smoke numerical_suite simd_audit_report)
+    add_custom_target(run_${tgt}
+        COMMAND ${QEMU_BIN} -L /usr/riscv64-linux-gnu
+                ${RVFORGE_BUILD_DIR}/bin/${tgt}
+        DEPENDS ${tgt}
+        COMMENT "QEMU: ${tgt}"
+        VERBATIM
+    )
+endforeach()
 
-add_custom_target(run_blas_smoke
-    COMMAND ${QEMU_BIN} -L /usr/riscv64-linux-gnu
-            ${RVFORGE_BUILD_DIR}/bin/blas_smoke
-    DEPENDS blas_smoke
-    COMMENT "Running blas_smoke under qemu-riscv64-static"
-    VERBATIM
-)
-
-add_custom_target(run_all_smoke
-    DEPENDS run_mpfr_smoke run_blas_smoke
-    COMMENT "All smoke tests complete"
+add_custom_target(run_all_
+    DEPENDS
+        run_mpfr_smoke
+        run_blas_smoke
+        run_numerical_suite
+        run_simd_audit_report
+    COMMENT "all tests complete"
 )
 
 if(RVFORGE_RUN_TESTS)
     rvforge_add_qemu_test(mpfr_smoke)
     rvforge_add_qemu_test(blas_smoke)
+    rvforge_add_qemu_test(numerical_suite)
+    rvforge_add_qemu_test(simd_audit_report)
 endif()
 
 add_custom_target(audit_binaries
