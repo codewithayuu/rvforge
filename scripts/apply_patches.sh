@@ -89,10 +89,38 @@ apply_openblas_patches() {
     log_patch \
         "${PATCHES_DIR}/0003-openblas-cpuid-guard.patch" \
         "${OPENBLAS_SRC}"
+    log_patch \
+        "${PATCHES_DIR}/0004-openblas-dgemv-sse2-scalar.patch" \
+        "${OPENBLAS_SRC}"
+    log_patch \
+        "${PATCHES_DIR}/0005-openblas-dgemm-avx-scalar.patch" \
+        "${OPENBLAS_SRC}"
+    log_patch \
+        "${PATCHES_DIR}/0006-openblas-sgemm-avx-scalar.patch" \
+        "${OPENBLAS_SRC}"
+    log_patch \
+        "${PATCHES_DIR}/0007-openblas-zgemm-avx-scalar.patch" \
+        "${OPENBLAS_SRC}"
+    log_patch \
+        "${PATCHES_DIR}/0008-openblas-memory-sse-scalar.patch" \
+        "${OPENBLAS_SRC}"
+}
+
+copy_simd_header() {
+    if [ -n "${OPENBLAS_SRC}" ] && [ -d "${OPENBLAS_SRC}" ]; then
+        log_step "Copying rvforge_simd.h into OpenBLAS kernel include path..."
+        mkdir -p "${OPENBLAS_SRC}/kernel/riscv64"
+        cp "${ROOT}/simd_fallbacks/rvforge_simd.h" \
+           "${OPENBLAS_SRC}/kernel/riscv64/rvforge_simd.h"
+        cp "${ROOT}/simd_fallbacks/rvforge_simd.h" \
+           "${OPENBLAS_SRC}/kernel/generic/rvforge_simd.h" 2>/dev/null || true
+        log_info "rvforge_simd.h deployed"
+    fi
 }
 
 post_patch_verify() {
     log_step "Post-patch verification..."
+    local ok=0
 
     if [ -d "${OPENBLAS_SRC}" ]; then
         local cpuid_file="${OPENBLAS_SRC}/driver/others/cpuid_x86.c"
@@ -112,6 +140,15 @@ post_patch_verify() {
                 log_warn "CMakeLists.txt: RISCV64_GENERIC not found"
             fi
         fi
+
+        for pat in "__riscv" "RISCV64_GENERIC"; do
+            local count
+            count=$(grep -rl "${pat}" "${OPENBLAS_SRC}" \
+                    --include="*.c" --include="*.h" --include="CMakeLists.txt" \
+                    2>/dev/null | wc -l)
+            log_info "  '${pat}' present in ${count} files"
+            [ "$count" -eq 0 ] && ok=1
+        done
     fi
 
     if [ -d "${GMP_SRC}" ]; then
@@ -124,6 +161,8 @@ post_patch_verify() {
             fi
         fi
     fi
+
+    [ $ok -eq 0 ] && log_info "Post-verify: OK" || log_warn "Post-verify: some guards missing"
 }
 
 main() {
@@ -135,6 +174,7 @@ main() {
 
     apply_gmp_patches
     apply_openblas_patches
+    copy_simd_header
     post_patch_verify
 
     log_info "=== Patch application complete ==="
