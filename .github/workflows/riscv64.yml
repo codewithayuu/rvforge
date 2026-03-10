@@ -174,10 +174,128 @@ jobs:
           name: openblas-logs
           path: docs/errors/
 
+  apply-patches:
+    name: Apply Patches
+    runs-on: ubuntu-22.04
+    needs: [cross-build-mpfr, cross-build-openblas]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y patch wget xz-utils
+
+      - name: Restore OpenBLAS source
+        uses: actions/download-artifact@v4
+        with:
+          name: openblas-artifacts
+          path: extern/
+
+      - name: Apply all patches
+        run: |
+          chmod +x scripts/apply_patches.sh
+          ./scripts/apply_patches.sh
+
+      - name: Upload patched sources
+        uses: actions/upload-artifact@v4
+        with:
+          name: patched-sources
+          path: extern/
+
+  simd-audit:
+    name: SIMD Intrinsic Audit
+    runs-on: ubuntu-22.04
+    needs: apply-patches
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            qemu-user-static cmake ninja-build wget xz-utils
+
+      - name: Restore patched sources
+        uses: actions/download-artifact@v4
+        with:
+          name: patched-sources
+          path: extern/
+
+      - name: Run SIMD audit
+        run: |
+          chmod +x scripts/simd_audit.sh
+          ./scripts/simd_audit.sh
+
+      - name: Upload audit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: simd-audit-report
+          path: |
+            audit/x86_intrinsics_found.txt
+            audit/simd_audit_report.md
+
+  numerical-suite:
+    name: Numerical Correctness Suite
+    runs-on: ubuntu-22.04
+    needs: [cross-build-openblas, cross-build-mpfr]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            gcc-riscv64-linux-gnu g++-riscv64-linux-gnu \
+            binutils-riscv64-linux-gnu qemu-user-static \
+            cmake ninja-build
+
+      - name: Restore artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: openblas-artifacts
+          path: build_ci/install/openblas
+
+      - name: Build numerical_suite
+        run: |
+          cmake -S . -B build_ci \
+            -DCMAKE_TOOLCHAIN_FILE=toolchain/riscv64-linux-gnu.cmake \
+            -DRVFORGE_BUILD_MPFR=OFF \
+            -DRVFORGE_BUILD_OPENBLAS=OFF \
+            -G Ninja
+          cmake --build build_ci --target numerical_suite -- -j4
+
+      - name: Run numerical_suite under QEMU
+        run: |
+          qemu-riscv64-static -L /usr/riscv64-linux-gnu \
+            build_ci/bin/numerical_suite 2>&1 | tee audit/results/numerical_suite_ci.log
+          grep "STATUS: PASS" audit/results/numerical_suite_ci.log
+
+      - name: Run simd_audit_report under QEMU
+        run: |
+          cmake --build build_ci --target simd_audit_report -- -j4
+          qemu-riscv64-static -L /usr/riscv64-linux-gnu \
+            build_ci/bin/simd_audit_report 2>&1 | tee audit/results/simd_audit_ci.log
+          grep "STATUS: PASS" audit/results/simd_audit_ci.log
+
+      - name: Run diff_results
+        run: |
+          chmod +x scripts/diff_results.sh
+          ./scripts/diff_results.sh 1e-10
+
+      - name: Upload numerical results
+        uses: actions/upload-artifact@v4
+        with:
+          name: numerical-results
+          path: |
+            audit/results/
+            audit/simd_audit_report.md
+
   summarize:
     name: Summary
     runs-on: ubuntu-22.04
-    needs: [toolchain-probe, cross-build-mpfr, cross-build-openblas]
+    needs: [toolchain-probe, cross-build-mpfr, cross-build-openblas, apply-patches, simd-audit, numerical-suite]
     if: always()
     steps:
       - name: Write summary
@@ -189,6 +307,9 @@ jobs:
           echo "| Toolchain Probe | ${{ needs.toolchain-probe.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| MPFR Cross-Build | ${{ needs.cross-build-mpfr.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "| OpenBLAS Cross-Build | ${{ needs.cross-build-openblas.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Apply Patches | ${{ needs.apply-patches.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SIMD Audit | ${{ needs.simd-audit.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Numerical Suite | ${{ needs.numerical-suite.result }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "GCC: ${{ needs.toolchain-probe.outputs.gcc_version }}" >> $GITHUB_STEP_SUMMARY
           echo "QEMU: ${{ needs.toolchain-probe.outputs.qemu_version }}" >> $GITHUB_STEP_SUMMARY
