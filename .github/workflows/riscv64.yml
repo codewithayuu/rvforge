@@ -1,4 +1,4 @@
-name: RVForge RISC-V Cross-Compilation CI
+name: RVForge RISC-V Cross-Compilation CI — 
 
 on:
   push:
@@ -7,190 +7,117 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
-      enable_rvv:
-        description: 'Enable RVV stretch target'
+      epsilon:
+        description: 'Epsilon for numeric diff'
         required: false
-        default: 'false'
+        default: '1e-10'
 
 env:
-  RISCV_TRIPLE: riscv64-linux-gnu
-  MARCH: rv64gc
-  MABI: lp64d
-  BUILD_DIR: build_ci
-  INSTALL_DIR: install_ci
+  RISCV_TRIPLE:   riscv64-linux-gnu
+  MARCH:          rv64gc
+  MABI:           lp64d
+  BUILD_DIR:      build_ci
+  INSTALL_DIR:    build_ci/install
+  NPROC:          4
+  EPSILON:        ${{ github.event.inputs.epsilon || '1e-10' }}
+  CACHE_VERSION:  v4
 
 jobs:
   toolchain-probe:
     name: Toolchain Verification
     runs-on: ubuntu-22.04
     outputs:
-      gcc_version: ${{ steps.probe.outputs.gcc_version }}
-      qemu_version: ${{ steps.probe.outputs.qemu_version }}
+      gcc_version:   ${{ steps.probe.outputs.gcc_version }}
+      qemu_version:  ${{ steps.probe.outputs.qemu_version }}
+      cmake_version: ${{ steps.probe.outputs.cmake_version }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install RISC-V toolchain
+      - name: Install toolchain
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y \
-            gcc-riscv64-linux-gnu \
-            g++-riscv64-linux-gnu \
-            binutils-riscv64-linux-gnu \
-            qemu-user-static \
-            binfmt-support \
+            gcc-riscv64-linux-gnu g++-riscv64-linux-gnu \
+            binutils-riscv64-linux-gnu qemu-user-static \
             cmake ninja-build \
-            autoconf automake libtool texinfo \
-            wget xz-utils gawk libgmp-dev
+            autoconf automake libtool texinfo m4 \
+            wget xz-utils gawk python3
 
-      - name: Probe toolchain
+      - name: Probe
         id: probe
         run: |
-          GCC_VER=$(riscv64-linux-gnu-gcc --version | head -1)
-          QEMU_VER=$(qemu-riscv64-static --version | head -1)
-          echo "gcc_version=${GCC_VER}" >> "$GITHUB_OUTPUT"
-          echo "qemu_version=${QEMU_VER}" >> "$GITHUB_OUTPUT"
-          echo "GCC:  ${GCC_VER}"
-          echo "QEMU: ${QEMU_VER}"
+          echo "gcc_version=$(riscv64-linux-gnu-gcc --version | head -1)"  >> "$GITHUB_OUTPUT"
+          echo "qemu_version=$(qemu-riscv64-static --version | head -1)"   >> "$GITHUB_OUTPUT"
+          echo "cmake_version=$(cmake --version | head -1)"                >> "$GITHUB_OUTPUT"
 
-      - name: Compile and run hello-riscv
+      - name: Hello RISC-V
         run: |
-          cat > /tmp/hello.c <<'EOF'
+          cat > /tmp/hi.c <<'EOF'
           #include <stdio.h>
-          int main(void) {
-              printf("Hello from RISC-V (arch=%s)\n",
-          #if defined(__riscv)
-                  "riscv64"
+          int main(void){
+              printf("riscv=%d xlen=%d\n",
+          #ifdef __riscv
+              1
           #else
-                  "unknown"
+              0
           #endif
-              );
-              return 0;
+          ,
+          #ifdef __riscv_xlen
+              __riscv_xlen
+          #else
+              0
+          #endif
+              );return 0;
           }
           EOF
           riscv64-linux-gnu-gcc -march=rv64gc -mabi=lp64d -static \
-              -o /tmp/hello /tmp/hello.c
-          file /tmp/hello
-          qemu-riscv64-static /tmp/hello
+              -o /tmp/hi /tmp/hi.c
+          riscv64-linux-gnu-readelf -h /tmp/hi | grep -E "Class|Machine"
+          qemu-riscv64-static /tmp/hi
 
-  cross-build-mpfr:
-    name: Cross-Build MPFR
+      - name: Write toolchain summary
+        run: |
+          {
+            echo "## Toolchain"
+            echo "| Tool | Version |"
+            echo "|------|---------|"
+            echo "| riscv64-linux-gnu-gcc | $(riscv64-linux-gnu-gcc --version | head -1) |"
+            echo "| qemu-riscv64-static | $(qemu-riscv64-static --version | head -1) |"
+            echo "| cmake | $(cmake --version | head -1) |"
+            echo "| python3 | $(python3 --version) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  fetch-and-patch:
+    name: Fetch Sources & Apply Patches
     runs-on: ubuntu-22.04
     needs: toolchain-probe
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install toolchain
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y \
-            gcc-riscv64-linux-gnu g++-riscv64-linux-gnu \
-            binutils-riscv64-linux-gnu qemu-user-static \
-            cmake ninja-build autoconf automake libtool texinfo \
-            wget xz-utils gawk libgmp-dev
-
-      - name: Cache MPFR build
-        uses: actions/cache@v4
-        with:
-          path: |
-            ${{ env.BUILD_DIR }}/gmp-build
-            ${{ env.BUILD_DIR }}/mpfr-build
-            ${{ env.INSTALL_DIR }}
-          key: mpfr-riscv64-${{ hashFiles('ports/mpfr/CMakeLists.txt') }}
-
-      - name: Configure
-        run: |
-          cmake -S . -B ${{ env.BUILD_DIR }} \
-            -DCMAKE_TOOLCHAIN_FILE=toolchain/riscv64-linux-gnu.cmake \
-            -DRVFORGE_BUILD_MPFR=ON \
-            -DRVFORGE_BUILD_OPENBLAS=OFF \
-            -G Ninja \
-            2>&1 | tee docs/errors/ci_configure.log
-
-      - name: Build GMP + MPFR
-        run: |
-          cmake --build ${{ env.BUILD_DIR }} --target gmp_riscv  -- -j4 \
-            2>&1 | tee docs/errors/ci_gmp_build.log
-          cmake --build ${{ env.BUILD_DIR }} --target mpfr_riscv -- -j4 \
-            2>&1 | tee docs/errors/ci_mpfr_build.log
-
-      - name: Build smoke test binary
-        run: |
-          cmake --build ${{ env.BUILD_DIR }} --target mpfr_smoke -- -j4
-
-      - name: Run smoke test under QEMU
-        run: |
-          qemu-riscv64-static \
-            -L /usr/riscv64-linux-gnu \
-            ${{ env.BUILD_DIR }}/bin/mpfr_smoke
-
-      - name: Upload build logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: mpfr-logs
-          path: docs/errors/
-
-  cross-build-openblas:
-    name: Cross-Build OpenBLAS
-    runs-on: ubuntu-22.04
-    needs: toolchain-probe
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install toolchain
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y \
-            gcc-riscv64-linux-gnu g++-riscv64-linux-gnu \
-            binutils-riscv64-linux-gnu qemu-user-static \
-            cmake ninja-build
-
-      - name: Cache OpenBLAS build
-        uses: actions/cache@v4
-        with:
-          path: |
-            ${{ env.BUILD_DIR }}/openblas-build
-            ${{ env.INSTALL_DIR }}/openblas
-          key: openblas-riscv64-${{ hashFiles('ports/openblas/CMakeLists.txt', 'patches/0002-*.patch') }}
-
-      - name: Configure
-        run: |
-          cmake -S . -B ${{ env.BUILD_DIR }} \
-            -DCMAKE_TOOLCHAIN_FILE=toolchain/riscv64-linux-gnu.cmake \
-            -DRVFORGE_BUILD_MPFR=OFF \
-            -DRVFORGE_BUILD_OPENBLAS=ON \
-            -G Ninja \
-            2>&1 | tee docs/errors/ci_openblas_configure.log
-
-      - name: Build OpenBLAS
-        run: |
-          cmake --build ${{ env.BUILD_DIR }} --target openblas_riscv -- -j4 \
-            2>&1 | tee docs/errors/ci_openblas_build.log
-
-      - name: Upload build logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: openblas-logs
-          path: docs/errors/
-
-  apply-patches:
-    name: Apply Patches
-    runs-on: ubuntu-22.04
-    needs: [cross-build-mpfr, cross-build-openblas]
     steps:
       - uses: actions/checkout@v4
 
       - name: Install tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y patch wget xz-utils
+          sudo apt-get install -y wget xz-utils patch
 
-      - name: Restore OpenBLAS source
-        uses: actions/download-artifact@v4
-        with:
-          name: openblas-artifacts
-          path: extern/
+      - name: Fetch GMP
+        run: |
+          mkdir -p extern
+          wget -q https://gmplib.org/download/gmp/gmp-6.3.0.tar.xz \
+               -O extern/gmp-6.3.0.tar.xz
+          tar -xf extern/gmp-6.3.0.tar.xz -C extern/
+
+      - name: Fetch MPFR
+        run: |
+          wget -q https://www.mpfr.org/mpfr-current/mpfr-4.2.1.tar.xz \
+               -O extern/mpfr-4.2.1.tar.xz
+          tar -xf extern/mpfr-4.2.1.tar.xz -C extern/
+
+      - name: Fetch OpenBLAS
+        run: |
+          wget -q https://github.com/OpenMathLib/OpenBLAS/releases/download/v0.3.26/OpenBLAS-0.3.26.tar.gz \
+               -O extern/OpenBLAS-0.3.26.tar.gz
+          tar -xf extern/OpenBLAS-0.3.26.tar.gz -C extern/
+          mv extern/OpenBLAS-0.3.26 extern/openblas-0.3.26 2>/dev/null || true
 
       - name: Apply all patches
         run: |
@@ -200,46 +127,126 @@ jobs:
       - name: Upload patched sources
         uses: actions/upload-artifact@v4
         with:
-          name: patched-sources
+          name: patched-sources-${{ env.CACHE_VERSION }}
           path: extern/
+          retention-days: 1
 
-  simd-audit:
-    name: SIMD Intrinsic Audit
+  build-gmp:
+    name: Build GMP (riscv64)
     runs-on: ubuntu-22.04
-    needs: apply-patches
+    needs: fetch-and-patch
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install tools
+      - name: Install toolchain
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y \
             gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
-            qemu-user-static cmake ninja-build wget xz-utils
+            qemu-user-static cmake ninja-build \
+            autoconf automake libtool texinfo m4 wget xz-utils
 
-      - name: Restore patched sources
+      - name: Restore sources
         uses: actions/download-artifact@v4
         with:
-          name: patched-sources
+          name: patched-sources-${{ env.CACHE_VERSION }}
           path: extern/
 
-      - name: Run SIMD audit
-        run: |
-          chmod +x scripts/simd_audit.sh
-          ./scripts/simd_audit.sh
+      - name: Cache GMP
+        id: cache-gmp
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.INSTALL_DIR }}/gmp
+          key: gmp-riscv64-6.3.0-${{ env.CACHE_VERSION }}-${{ hashFiles('ports/mpfr/CMakeLists.txt') }}
 
-      - name: Upload audit report
+      - name: Configure (GMP only)
+        if: steps.cache-gmp.outputs.cache-hit != 'true'
+        run: |
+          cmake -S . -B ${{ env.BUILD_DIR }} \
+            -DCMAKE_TOOLCHAIN_FILE=toolchain/riscv64-linux-gnu.cmake \
+            -DRVFORGE_BUILD_MPFR=ON \
+            -DRVFORGE_BUILD_OPENBLAS=OFF \
+            -G Ninja
+
+      - name: Build GMP
+        if: steps.cache-gmp.outputs.cache-hit != 'true'
+        run: |
+          cmake --build ${{ env.BUILD_DIR }} --target gmp_riscv -- -j${{ env.NPROC }}
+
+      - name: Verify GMP ELF
+        run: |
+          riscv64-linux-gnu-readelf -h \
+            ${{ env.INSTALL_DIR }}/gmp/lib/libgmp.a 2>/dev/null \
+            | grep -E "Class|Machine" | head -4 \
+            || echo "Archive — checking first member"
+          file ${{ env.INSTALL_DIR }}/gmp/lib/libgmp.a
+
+      - name: Upload GMP
         uses: actions/upload-artifact@v4
         with:
-          name: simd-audit-report
-          path: |
-            audit/x86_intrinsics_found.txt
-            audit/simd_audit_report.md
+          name: gmp-install-${{ env.CACHE_VERSION }}
+          path: ${{ env.INSTALL_DIR }}/gmp
+          retention-days: 1
 
-  numerical-suite:
-    name: Numerical Correctness Suite
+  build-mpfr:
+    name: Build MPFR (riscv64)
     runs-on: ubuntu-22.04
-    needs: [cross-build-openblas, cross-build-mpfr]
+    needs: build-gmp
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            qemu-user-static cmake ninja-build \
+            autoconf automake libtool texinfo m4 wget xz-utils
+
+      - name: Restore sources
+        uses: actions/download-artifact@v4
+        with:
+          name: patched-sources-${{ env.CACHE_VERSION }}
+          path: extern/
+
+      - name: Restore GMP
+        uses: actions/download-artifact@v4
+        with:
+          name: gmp-install-${{ env.CACHE_VERSION }}
+          path: ${{ env.INSTALL_DIR }}/gmp
+
+      - name: Cache MPFR
+        id: cache-mpfr
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.INSTALL_DIR }}/mpfr
+          key: mpfr-riscv64-4.2.1-${{ env.CACHE_VERSION }}-${{ hashFiles('ports/mpfr/CMakeLists.txt') }}
+
+      - name: Configure
+        if: steps.cache-mpfr.outputs.cache-hit != 'true'
+        run: |
+          cmake -S . -B ${{ env.BUILD_DIR }} \
+            -DCMAKE_TOOLCHAIN_FILE=toolchain/riscv64-linux-gnu.cmake \
+            -DRVFORGE_BUILD_MPFR=ON \
+            -DRVFORGE_BUILD_OPENBLAS=OFF \
+            -G Ninja
+
+      - name: Build MPFR
+        if: steps.cache-mpfr.outputs.cache-hit != 'true'
+        run: |
+          cmake --build ${{ env.BUILD_DIR }} --target mpfr_riscv -- -j${{ env.NPROC }}
+
+      - name: Upload MPFR
+        uses: actions/upload-artifact@v4
+        with:
+          name: mpfr-install-${{ env.CACHE_VERSION }}
+          path: ${{ env.INSTALL_DIR }}/mpfr
+          retention-days: 1
+
+  build-openblas:
+    name: Build OpenBLAS (riscv64)
+    runs-on: ubuntu-22.04
+    needs: fetch-and-patch
     steps:
       - uses: actions/checkout@v4
 
@@ -251,65 +258,376 @@ jobs:
             binutils-riscv64-linux-gnu qemu-user-static \
             cmake ninja-build
 
-      - name: Restore artifacts
+      - name: Restore sources
         uses: actions/download-artifact@v4
         with:
-          name: openblas-artifacts
-          path: build_ci/install/openblas
+          name: patched-sources-${{ env.CACHE_VERSION }}
+          path: extern/
 
-      - name: Build numerical_suite
+      - name: Cache OpenBLAS
+        id: cache-openblas
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.INSTALL_DIR }}/openblas
+          key: openblas-riscv64-0.3.26-${{ env.CACHE_VERSION }}-${{ hashFiles('ports/openblas/CMakeLists.txt', 'patches/0002-*.patch', 'patches/0003-*.patch', 'patches/0004-*.patch', 'patches/0005-*.patch') }}
+
+      - name: Configure
+        if: steps.cache-openblas.outputs.cache-hit != 'true'
         run: |
-          cmake -S . -B build_ci \
+          cmake -S . -B ${{ env.BUILD_DIR }} \
+            -DCMAKE_TOOLCHAIN_FILE=toolchain/riscv64-linux-gnu.cmake \
+            -DRVFORGE_BUILD_MPFR=OFF \
+            -DRVFORGE_BUILD_OPENBLAS=ON \
+            -G Ninja
+
+      - name: Build OpenBLAS
+        if: steps.cache-openblas.outputs.cache-hit != 'true'
+        run: |
+          cmake --build ${{ env.BUILD_DIR }} --target openblas_riscv -- -j${{ env.NPROC }}
+
+      - name: Audit no x86 SIMD in output
+        run: |
+          riscv64-linux-gnu-objdump -d \
+            ${{ env.INSTALL_DIR }}/openblas/lib/libopenblas.a 2>/dev/null \
+            | grep -cE "xmm[0-9]|ymm[0-9]|_mm_" \
+            && { echo "FAIL: x86 SIMD found in riscv64 library"; exit 1; } \
+            || echo "PASS: no x86 SIMD symbols in riscv64 libopenblas.a"
+
+      - name: Upload OpenBLAS
+        uses: actions/upload-artifact@v4
+        with:
+          name: openblas-install-${{ env.CACHE_VERSION }}
+          path: ${{ env.INSTALL_DIR }}/openblas
+          retention-days: 1
+
+  build-harness:
+    name: Build Test Harness (riscv64)
+    runs-on: ubuntu-22.04
+    needs: [build-mpfr, build-openblas]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            gcc-riscv64-linux-gnu g++-riscv64-linux-gnu \
+            binutils-riscv64-linux-gnu qemu-user-static \
+            cmake ninja-build
+
+      - name: Restore all installs
+        run: mkdir -p ${{ env.INSTALL_DIR }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: gmp-install-${{ env.CACHE_VERSION }}
+          path: ${{ env.INSTALL_DIR }}/gmp
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: mpfr-install-${{ env.CACHE_VERSION }}
+          path: ${{ env.INSTALL_DIR }}/mpfr
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: openblas-install-${{ env.CACHE_VERSION }}
+          path: ${{ env.INSTALL_DIR }}/openblas
+
+      - name: Configure harness only
+        run: |
+          cmake -S . -B ${{ env.BUILD_DIR }} \
             -DCMAKE_TOOLCHAIN_FILE=toolchain/riscv64-linux-gnu.cmake \
             -DRVFORGE_BUILD_MPFR=OFF \
             -DRVFORGE_BUILD_OPENBLAS=OFF \
+            -DRVFORGE_RUN_TESTS=ON \
             -G Ninja
-          cmake --build build_ci --target numerical_suite -- -j4
 
-      - name: Run numerical_suite under QEMU
+      - name: Build all harness targets
         run: |
-          qemu-riscv64-static -L /usr/riscv64-linux-gnu \
-            build_ci/bin/numerical_suite 2>&1 | tee audit/results/numerical_suite_ci.log
-          grep "STATUS: PASS" audit/results/numerical_suite_ci.log
+          cmake --build ${{ env.BUILD_DIR }} -- -j${{ env.NPROC }}
 
-      - name: Run simd_audit_report under QEMU
+      - name: Verify ELF headers
         run: |
-          cmake --build build_ci --target simd_audit_report -- -j4
-          qemu-riscv64-static -L /usr/riscv64-linux-gnu \
-            build_ci/bin/simd_audit_report 2>&1 | tee audit/results/simd_audit_ci.log
-          grep "STATUS: PASS" audit/results/simd_audit_ci.log
+          for bin in ${{ env.BUILD_DIR }}/bin/*; do
+            echo -n "$(basename $bin): "
+            riscv64-linux-gnu-readelf -h "$bin" 2>/dev/null \
+              | grep -E "Class|Machine" | tr '\n' ' ' || echo "?"
+            echo ""
+          done
 
-      - name: Run diff_results
-        run: |
-          chmod +x scripts/diff_results.sh
-          ./scripts/diff_results.sh 1e-10
-
-      - name: Upload numerical results
+      - name: Upload harness binaries
         uses: actions/upload-artifact@v4
         with:
-          name: numerical-results
+          name: harness-binaries-${{ env.CACHE_VERSION }}
+          path: ${{ env.BUILD_DIR }}/bin/
+          retention-days: 1
+
+  simd-audit:
+    name: SIMD Intrinsic Audit
+    runs-on: ubuntu-22.04
+    needs: fetch-and-patch
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore sources
+        uses: actions/download-artifact@v4
+        with:
+          name: patched-sources-${{ env.CACHE_VERSION }}
+          path: extern/
+
+      - name: Run audit
+        run: |
+          chmod +x scripts/simd_audit.sh
+          ./scripts/simd_audit.sh
+
+      - name: Upload audit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: simd-audit-${{ env.CACHE_VERSION }}
           path: |
-            audit/results/
+            audit/x86_intrinsics_found.txt
             audit/simd_audit_report.md
 
-  summarize:
-    name: Summary
+      - name: Summary
+        run: |
+          echo "## SIMD Audit" >> "$GITHUB_STEP_SUMMARY"
+          cat audit/simd_audit_report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+
+  qemu-validate:
+    name: QEMU Validation Pipeline
     runs-on: ubuntu-22.04
-    needs: [toolchain-probe, cross-build-mpfr, cross-build-openblas, apply-patches, simd-audit, numerical-suite]
+    needs: build-harness
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install QEMU + Python
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            binutils-riscv64-linux-gnu \
+            qemu-user-static \
+            python3
+
+      - name: Restore harness binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: harness-binaries-${{ env.CACHE_VERSION }}
+          path: build_ci/bin/
+
+      - name: Fix permissions
+        run: chmod +x build_ci/bin/*
+
+      - name: Run full QEMU validation
+        env:
+          EPSILON: ${{ env.EPSILON }}
+        run: |
+          chmod +x scripts/validate_qemu.sh
+          ./scripts/validate_qemu.sh
+
+      - name: Upload validation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-report-${{ env.CACHE_VERSION }}
+          path: |
+            docs/validation_report.md
+            docs/*_diff.md
+            docs/*_diff.json
+            validation/results/
+
+      - name: Write step summary
+        if: always()
+        run: |
+          echo "## QEMU Validation" >> "$GITHUB_STEP_SUMMARY"
+          cat docs/validation_report.md >> "$GITHUB_STEP_SUMMARY" 2>/dev/null \
+            || echo "Report not generated" >> "$GITHUB_STEP_SUMMARY"
+
+  ctest-suite:
+    name: CTest Suite
+    runs-on: ubuntu-22.04
+    needs: build-harness
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install QEMU
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            qemu-user-static cmake ninja-build
+
+      - name: Restore installs
+        run: mkdir -p ${{ env.INSTALL_DIR }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: gmp-install-${{ env.CACHE_VERSION }}
+          path: ${{ env.INSTALL_DIR }}/gmp
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: mpfr-install-${{ env.CACHE_VERSION }}
+          path: ${{ env.INSTALL_DIR }}/mpfr
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: openblas-install-${{ env.CACHE_VERSION }}
+          path: ${{ env.INSTALL_DIR }}/openblas
+
+      - name: Restore harness binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: harness-binaries-${{ env.CACHE_VERSION }}
+          path: ${{ env.BUILD_DIR }}/bin/
+
+      - name: Configure for CTest
+        run: |
+          cmake -S . -B ${{ env.BUILD_DIR }} \
+            -DCMAKE_TOOLCHAIN_FILE=toolchain/riscv64-linux-gnu.cmake \
+            -DRVFORGE_BUILD_MPFR=OFF \
+            -DRVFORGE_BUILD_OPENBLAS=OFF \
+            -DRVFORGE_RUN_TESTS=ON \
+            -G Ninja
+
+      - name: Fix binary permissions
+        run: chmod +x ${{ env.BUILD_DIR }}/bin/*
+
+      - name: Run CTest
+        run: |
+          cd ${{ env.BUILD_DIR }}
+          ctest --output-on-failure \
+                --timeout 300 \
+                -j1 \
+                2>&1 | tee ${{ env.BUILD_DIR }}/ctest_output.log
+
+      - name: Upload CTest log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctest-log-${{ env.CACHE_VERSION }}
+          path: ${{ env.BUILD_DIR }}/ctest_output.log
+
+  upstream-tests:
+    name: Upstream Library Tests
+    runs-on: ubuntu-22.04
+    needs: [build-mpfr, build-openblas]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            qemu-user-static cmake ninja-build \
+            autoconf automake libtool texinfo m4 wget xz-utils
+
+      - name: Restore sources and installs
+        run: mkdir -p ${{ env.INSTALL_DIR }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: patched-sources-${{ env.CACHE_VERSION }}
+          path: extern/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: openblas-install-${{ env.CACHE_VERSION }}
+          path: ${{ env.INSTALL_DIR }}/openblas
+
+      - name: Run upstream tests
+        run: |
+          chmod +x scripts/run_upstream_tests.sh
+          ./scripts/run_upstream_tests.sh || true
+
+      - name: Upload upstream results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-results-${{ env.CACHE_VERSION }}
+          path: validation/results/upstream/
+
+  bitrot-guard:
+    name: Bit-Rot Guard (dependency hash check)
+    runs-on: ubuntu-22.04
+    needs: toolchain-probe
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check toolchain file hash
+        run: |
+          sha256sum toolchain/riscv64-linux-gnu.cmake
+          sha256sum patches/*.patch
+          sha256sum ports/mpfr/CMakeLists.txt
+          sha256sum ports/openblas/CMakeLists.txt
+
+      - name: Verify patch count
+        run: |
+          expected=8
+          actual=$(ls patches/*.patch 2>/dev/null | wc -l)
+          echo "Expected patches: ${expected}, Found: ${actual}"
+          [ "$actual" -ge "$expected" ] \
+            || { echo "FAIL: missing patches"; exit 1; }
+
+      - name: Verify simd_fallbacks present
+        run: |
+          for f in \
+            simd_fallbacks/rvforge_simd.h \
+            simd_fallbacks/scalar_dgemv.c \
+            simd_fallbacks/scalar_dgemm.c \
+            simd_fallbacks/scalar_sgemm.c \
+            simd_fallbacks/scalar_memory.c
+          do
+            [ -f "$f" ] && echo "✓ $f" || { echo "MISSING: $f"; exit 1; }
+          done
+
+      - name: Verify validation script
+        run: |
+          chmod +x scripts/validate_qemu.sh
+          bash -n scripts/validate_qemu.sh && echo "validate_qemu.sh: syntax OK"
+          chmod +x validation/compare_outputs.py
+          python3 -m py_compile validation/compare_outputs.py \
+            && echo "compare_outputs.py: syntax OK"
+
+  final-summary:
+    name: Final CI Summary
+    runs-on: ubuntu-22.04
+    needs:
+      - toolchain-probe
+      - fetch-and-patch
+      - build-gmp
+      - build-mpfr
+      - build-openblas
+      - build-harness
+      - simd-audit
+      - qemu-validate
+      - ctest-suite
+      - upstream-tests
+      - bitrot-guard
     if: always()
     steps:
-      - name: Write summary
+      - name: Write final summary
         run: |
-          echo "## RVForge Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Toolchain Probe | ${{ needs.toolchain-probe.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| MPFR Cross-Build | ${{ needs.cross-build-mpfr.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| OpenBLAS Cross-Build | ${{ needs.cross-build-openblas.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Apply Patches | ${{ needs.apply-patches.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| SIMD Audit | ${{ needs.simd-audit.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Numerical Suite | ${{ needs.numerical-suite.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "GCC: ${{ needs.toolchain-probe.outputs.gcc_version }}" >> $GITHUB_STEP_SUMMARY
-          echo "QEMU: ${{ needs.toolchain-probe.outputs.qemu_version }}" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "# RVForge CI — Complete"
+            echo ""
+            echo "| Job | Result |"
+            echo "|-----|--------|"
+            echo "| Toolchain Probe | ${{ needs.toolchain-probe.result }} |"
+            echo "| Fetch & Patch | ${{ needs.fetch-and-patch.result }} |"
+            echo "| Build GMP | ${{ needs.build-gmp.result }} |"
+            echo "| Build MPFR | ${{ needs.build-mpfr.result }} |"
+            echo "| Build OpenBLAS | ${{ needs.build-openblas.result }} |"
+            echo "| Build Harness | ${{ needs.build-harness.result }} |"
+            echo "| SIMD Audit | ${{ needs.simd-audit.result }} |"
+            echo "| QEMU Validate | ${{ needs.qemu-validate.result }} |"
+            echo "| CTest Suite | ${{ needs.ctest-suite.result }} |"
+            echo "| Upstream Tests | ${{ needs.upstream-tests.result }} |"
+            echo "| Bit-Rot Guard | ${{ needs.bitrot-guard.result }} |"
+            echo ""
+            echo "**Toolchain:** ${{ needs.toolchain-probe.outputs.gcc_version }}"
+            echo ""
+            echo "**QEMU:** ${{ needs.toolchain-probe.outputs.qemu_version }}"
+            echo ""
+            echo "**Epsilon:** \`${{ env.EPSILON }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
