@@ -9,7 +9,24 @@ set(HARNESS_INCLUDES
     ${RVFORGE_INSTALL_DIR}/openblas/include
     ${RVFORGE_ROOT}/simd_fallbacks
     ${RVFORGE_ROOT}/validation
+    ${RVFORGE_ROOT}/rvv
 )
+
+set(RVV_SRCS
+    ${RVFORGE_ROOT}/rvv/rvv_ddot.c
+    ${RVFORGE_ROOT}/rvv/rvv_daxpy.c
+    ${RVFORGE_ROOT}/rvv/rvv_dnrm2.c
+    ${RVFORGE_ROOT}/rvv/rvv_dgemv.c
+    ${RVFORGE_ROOT}/rvv/rvv_dgemm.c
+)
+
+if(RVFORGE_ENABLE_RVV)
+    set(RVV_COMPILE_FLAGS -march=rv64gcv -mabi=lp64d -O2
+                          -fno-stack-protector -ffunction-sections)
+else()
+    set(RVV_COMPILE_FLAGS -march=rv64gc -mabi=lp64d -O2
+                          -fno-stack-protector -ffunction-sections)
+endif()
 
 set(MPFR_LIBS
     ${RVFORGE_INSTALL_DIR}/mpfr/lib/libmpfr.a
@@ -28,11 +45,14 @@ set(SIMD_FALLBACK_SRCS
 )
 
 function(add_harness_target name)
-    cmake_parse_arguments(A "" "" "SRCS;LIBS;DEPS" ${ARGN})
+    cmake_parse_arguments(A "" "" "SRCS;LIBS;DEPS;EXTRA_FLAGS" ${ARGN})
     add_executable(${name} ${A_SRCS})
     target_include_directories(${name} PRIVATE ${HARNESS_INCLUDES})
     target_link_libraries(${name} PRIVATE ${A_LIBS} m)
     rvforge_apply_flags(${name})
+    if(A_EXTRA_FLAGS)
+        target_compile_options(${name} PRIVATE ${A_EXTRA_FLAGS})
+    endif()
     rvforge_record_size(${name})
     if(A_DEPS)
         add_dependencies(${name} ${A_DEPS})
@@ -88,6 +108,16 @@ add_harness_target(blas_full_suite
     DEPS openblas_riscv
 )
 
+add_harness_target(rvv_correctness
+    SRCS rvv_correctness.c ${RVV_SRCS}
+    LIBS ""
+    EXTRA_FLAGS ${RVV_COMPILE_FLAGS})
+
+add_harness_target(rvv_vs_scalar_bench
+    SRCS rvv_vs_scalar_bench.c ${RVV_SRCS}
+    LIBS ""
+    EXTRA_FLAGS ${RVV_COMPILE_FLAGS})
+
 add_custom_target(run_all_
     DEPENDS
         run_mpfr_smoke
@@ -96,12 +126,20 @@ add_custom_target(run_all_
         run_simd_audit_report
         run_mpfr_full_suite
         run_blas_full_suite
-    COMMENT "all validation targets complete"
+        run_rvv_correctness
+        run_rvv_vs_scalar_bench
+    COMMENT "all targets complete"
 )
 
 add_custom_target(validate
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/validate_qemu.sh
-    DEPENDS run_all_
+    DEPENDS run_mpfr_smoke run_blas_smoke run_numerical_suite run_simd_audit_report run_mpfr_full_suite run_blas_full_suite
     COMMENT "Running full QEMU validation pipeline"
+    VERBATIM
+)
+
+add_custom_target(bench_rvv
+    COMMAND ${CMAKE_SOURCE_DIR}/scripts/bench_rvv.sh
+    COMMENT "Running RVV benchmark suite"
     VERBATIM
 )
