@@ -102,13 +102,13 @@ jobs:
       - name: Fetch GMP
         run: |
           mkdir -p extern
-          wget -q https://gmplib.org/download/gmp/gmp-6.3.0.tar.xz \
+          wget -q https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz \
                -O extern/gmp-6.3.0.tar.xz
           tar -xf extern/gmp-6.3.0.tar.xz -C extern/
 
       - name: Fetch MPFR
         run: |
-          wget -q https://www.mpfr.org/mpfr-current/mpfr-4.2.1.tar.xz \
+          wget -q https://ftp.gnu.org/gnu/mpfr/mpfr-4.2.1.tar.xz \
                -O extern/mpfr-4.2.1.tar.xz
           tar -xf extern/mpfr-4.2.1.tar.xz -C extern/
 
