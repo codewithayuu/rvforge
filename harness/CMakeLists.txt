@@ -1,7 +1,7 @@
 include(${RVFORGE_ROOT}/toolchain/flags.cmake)
 include(${RVFORGE_ROOT}/cmake/RVForgeUtils.cmake)
 
-find_program(QEMU_BIN qemu-riscv64-static REQUIRED)
+find_program(QEMU_BIN NAMES qemu-riscv64-static qemu-riscv64 REQUIRED)
 
 set(HARNESS_INCLUDES
     ${RVFORGE_INSTALL_DIR}/mpfr/include

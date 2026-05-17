@@ -17,6 +17,8 @@ set(OPENBLAS_PATCH_CMD
 foreach(p ${OPENBLAS_PATCHES})
     list(APPEND OPENBLAS_PATCH_CMD && patch -p1 < ${p})
 endforeach()
+list(APPEND OPENBLAS_PATCH_CMD "&&" "sed" "-i" "s/add_subdirectory(utest)/#add_subdirectory(utest)/g" "CMakeLists.txt")
+list(APPEND OPENBLAS_PATCH_CMD "&&" "sed" "-i" "s/add_subdirectory(ctest)/#add_subdirectory(ctest)/g" "CMakeLists.txt")
 
 ExternalProject_Add(openblas_riscv
     URL               ${OPENBLAS_URL}
@@ -32,7 +34,7 @@ ExternalProject_Add(openblas_riscv
         -DCMAKE_TOOLCHAIN_FILE=${RVFORGE_ROOT}/toolchain/riscv64-linux-gnu.cmake
         -DCMAKE_BUILD_TYPE=Release
         -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
-        -DCMAKE_C_FLAGS=${COMMON_CFLAGS}
+        "-DCMAKE_C_FLAGS=${COMMON_CFLAGS} -std=gnu89 -DDTB_DEFAULT_ENTRIES=64"
         -DTARGET=RISCV64_GENERIC
         -DARCH=riscv64
         -DCORE=RISCV64_GENERIC

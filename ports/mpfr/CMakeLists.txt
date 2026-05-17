@@ -82,8 +82,6 @@ ExternalProject_Add(mpfr_riscv
             --disable-shared
             --with-pic
             --with-gmp=${GMP_INSTALL}
-            --with-gmp-include=${GMP_INSTALL}/include
-            --with-gmp-lib=${GMP_INSTALL}/lib
             --disable-assert
             ${CROSS_ENV}
     BUILD_COMMAND

@@ -6,6 +6,10 @@ if(NOT DEFINED RISCV_MABI)
     set(RISCV_MABI "lp64d")
 endif()
 
+set(COMMON_CFLAGS
+    "${RISCV_ARCH_FLAGS} ${RISCV_SAFETY_FLAGS_STR} -O2 -std=gnu99 -Wno-implicit-function-declaration -Wno-incompatible-pointer-types -Wno-int-conversion"
+)
+
 set(RVFORGE_C_FLAGS
     -march=${RISCV_MARCH}
     -mabi=${RISCV_MABI}
