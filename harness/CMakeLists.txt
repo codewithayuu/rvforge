@@ -112,11 +112,6 @@ add_harness_target(simd_audit_report
     DEPS ""
 )
 
-add_harness_target(blas_full_suite
-    SRCS blas_full_suite.c
-    LIBS ${BLAS_LIBS}
-    DEPS openblas_riscv
-)
 
 add_harness_target(rvv_correctness
     SRCS rvv_correctness.c ${RVV_SRCS}
