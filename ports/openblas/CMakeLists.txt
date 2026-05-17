@@ -24,6 +24,7 @@ ExternalProject_Add(openblas_riscv
     SOURCE_DIR        ${OPENBLAS_SRC_DIR}
     BINARY_DIR        ${OPENBLAS_BUILD_DIR}
     INSTALL_DIR       ${OPENBLAS_INSTALL}
+    DOWNLOAD_EXTRACT_TIMESTAMP true
 
     PATCH_COMMAND     ${OPENBLAS_PATCH_CMD}
 

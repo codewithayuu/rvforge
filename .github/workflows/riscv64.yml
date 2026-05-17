@@ -142,7 +142,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y \
-            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            gcc-riscv64-linux-gnu g++-riscv64-linux-gnu \
+            binutils-riscv64-linux-gnu \
             qemu-user-static cmake ninja-build \
             autoconf automake libtool texinfo m4 wget xz-utils
 
@@ -199,7 +200,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y \
-            gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu \
+            gcc-riscv64-linux-gnu g++-riscv64-linux-gnu \
+            binutils-riscv64-linux-gnu \
             qemu-user-static cmake ninja-build \
             autoconf automake libtool texinfo m4 wget xz-utils
 

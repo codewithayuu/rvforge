@@ -34,6 +34,7 @@ ExternalProject_Add(gmp_riscv
     SOURCE_DIR        ${GMP_SRC_DIR}
     BINARY_DIR        ${GMP_BUILD_DIR}
     INSTALL_DIR       ${GMP_INSTALL}
+    DOWNLOAD_EXTRACT_TIMESTAMP true
     PATCH_COMMAND
         cd <SOURCE_DIR> &&
         patch -p1 < ${RVFORGE_PATCHES}/0001-gmp-riscv-host-detect.patch || true
@@ -73,6 +74,7 @@ ExternalProject_Add(mpfr_riscv
     SOURCE_DIR        ${MPFR_SRC_DIR}
     BINARY_DIR        ${MPFR_BUILD_DIR}
     INSTALL_DIR       ${MPFR_INSTALL}
+    DOWNLOAD_EXTRACT_TIMESTAMP true
     CONFIGURE_COMMAND
         ${MPFR_SRC_DIR}/configure
             --host=${RISCV_TRIPLE}
