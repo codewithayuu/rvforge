@@ -60,9 +60,7 @@ ExternalProject_Add(gmp_riscv
 )
 
 ExternalProject_Add_Step(gmp_riscv verify_elf
-    COMMAND
-        riscv64-linux-gnu-readelf -h ${GMP_INSTALL}/lib/libgmp.a
-        | grep -E "Class|Machine" | head -4
+    COMMAND sh -c "riscv64-linux-gnu-readelf -h ${GMP_INSTALL}/lib/libgmp.a | grep -E 'Class|Machine' | head -4"
     DEPENDEES install
     LOG ON
 )
@@ -100,9 +98,7 @@ ExternalProject_Add(mpfr_riscv
 )
 
 ExternalProject_Add_Step(mpfr_riscv verify_elf
-    COMMAND
-        riscv64-linux-gnu-readelf -h ${MPFR_INSTALL}/lib/libmpfr.a
-        | grep -E "Class|Machine" | head -4
+    COMMAND sh -c "riscv64-linux-gnu-readelf -h ${MPFR_INSTALL}/lib/libmpfr.a | grep -E 'Class|Machine' | head -4"
     DEPENDEES install
     LOG ON
 )

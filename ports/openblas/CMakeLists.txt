@@ -71,9 +71,7 @@ ExternalProject_Add(openblas_riscv
 )
 
 ExternalProject_Add_Step(openblas_riscv verify_elf
-    COMMAND
-        riscv64-linux-gnu-readelf -h ${OPENBLAS_INSTALL}/lib/libopenblas.a
-        | grep -E "Class|Machine" | head -4
+    COMMAND sh -c "riscv64-linux-gnu-readelf -h ${OPENBLAS_INSTALL}/lib/libopenblas.a | grep -E 'Class|Machine' | head -4"
     DEPENDEES install
     LOG ON
 )
