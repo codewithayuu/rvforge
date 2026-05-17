@@ -25,7 +25,7 @@ index d3f1a2c..9b7c3e4 100644
      set(CORE "CORTEXA57")
    endif()
 +  # RVForge: RISC-V 64-bit generic target
-+  if(TARGET STREQUAL "RISCV64_GENERIC")
++  if(${TARGET} STREQUAL "RISCV64_GENERIC")
 +    set(ARCH    "riscv64")
 +    set(CORE    "RISCV64_GENERIC")
 +    set(BINARY  "64")
