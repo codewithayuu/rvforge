@@ -49,9 +49,9 @@ ExternalProject_Add(gmp_riscv
             --with-pic
             ${CROSS_ENV}
     BUILD_COMMAND
-        $(MAKE) -j${NPROC} MAKEFLAGS=
+        make -j${NPROC} MAKEFLAGS=
     INSTALL_COMMAND
-        $(MAKE) install
+        make install
     BUILD_IN_SOURCE   0
     LOG_CONFIGURE     ON
     LOG_BUILD         ON
@@ -89,9 +89,9 @@ ExternalProject_Add(mpfr_riscv
             --disable-assert
             ${CROSS_ENV}
     BUILD_COMMAND
-        $(MAKE) -j${NPROC} MAKEFLAGS=
+        make -j${NPROC} MAKEFLAGS=
     INSTALL_COMMAND
-        $(MAKE) install
+        make install
     BUILD_IN_SOURCE   0
     LOG_CONFIGURE     ON
     LOG_BUILD         ON
